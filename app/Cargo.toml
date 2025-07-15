@@ -1,0 +1,13 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+named_vec_ops = { path = "../named_vec_ops" }
+named_vec_ops_derive = { path = "../named_vec_ops_derive" }
+erik_dual = { path = "../erik_dual" }
+num-traits = "0.2.19"
+num-dual = "0.11.2"
+dual = "0.2.0"
+nalgebra = "0.33.2"
