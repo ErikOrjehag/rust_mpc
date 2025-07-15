@@ -3,6 +3,8 @@ use named_vec_ops::NamedVecOps;
 use named_vec_ops_derive::NamedVecOps;
 use num_dual::{Dual64, DualNum};
 use nalgebra::{SMatrix, SVector};
+use std::fs::File;
+use std::io::Write;
 
 #[derive(Debug, Copy, Clone, NamedVecOps)]
 struct State<T>
@@ -113,22 +115,52 @@ where
 }
 
 fn cg_solve <
-    const XN: usize,
-    const UN: usize,
-    const XH: usize,
     const UH: usize,
 >(
     h: &SMatrix<f64, UH, UH>,
     f: &SVector<f64, UH>,
     x: &mut SVector<f64, UH>,
-    r: &SVector<f64, UH>,
+    r: &mut SVector<f64, UH>,
     p: &mut SVector<f64, UH>,
     hp: &mut SVector<f64, UH>,
     tol: f64,
     max_iter: usize,
 )
 {
-    // todo
+    if f.norm_squared() < tol * tol {
+        println!("Cost gradient near zero, skipping CG");
+        return;
+    }
+
+    *r = -f - h * *x;
+    *p = r.clone();
+
+    let mut rs_old = r.dot(r);
+
+    for _ in 0..max_iter {
+        *hp = h * *p;
+        let denom = p.dot(hp);
+        // if denom.abs() < 1e-12 {
+        //     println!("hp ≈ 0 -> either \n 1) search direction hit null space of H\n 2) we have converged\n 3) H is not strictly positive definite (e.g due to bad scaling, model linearization issues)\n 4) numerical errors accumulate and cause loss of percision");
+        //     break;
+        // }
+        if denom.abs() < 1e-12 {
+            println!("CG exited early: no significant gradient direction (pᵀHp ≈ 0)");
+            break;
+        }
+        let alpha = rs_old / denom;
+
+        *x += alpha * *p;
+        *r -= alpha * *hp;
+
+        if r.norm_squared() < tol * tol {
+            break;
+        }
+
+        let rs_new = r.dot(r);
+        *p = *r + (rs_new / rs_old) * *p;
+        rs_old = rs_new;
+    }
 }
 
 fn mpc1() {
@@ -139,13 +171,14 @@ fn mpc1() {
     const XH: usize = XN * HORIZON;
     const UH: usize = UN * HORIZON;
 
+    let dt = 0.1;
     let sim_steps: usize = 30;
     let max_iter: usize = 50;
     let tol = 1e-6;
     let q = 1.0;
-    let r = 0.1;
+    let r = 0.01;
 
-    let mut x: State64 = State { x: 0.0, y: 0.0, angle: 0.0 };
+    let mut x: State64 = State { x: 0.0, y: 0.0, angle: 30.0 * std::f64::consts::PI / 180.0 };
     let mut u_prev = SVector::<f64, UH>::zeros();
     let mut delta_x0 = SVector::<f64, XH>::zeros();
     let mut h = SMatrix::<f64, UH, UH>::zeros();
@@ -163,24 +196,35 @@ fn mpc1() {
     let mut u_ref = [Control64 { v: 0.0, w: 0.0 }; HORIZON];
     let params = Parameters { ref_x: 0.0, ref_y: 0.0 };
 
+    let mut trajectory: Vec<(f64, f64, f64, f64)> = Vec::with_capacity(sim_steps);
+
+    println!("\n\n- - - - - - - - - - - - - -\nStarting MPC simulation with {} steps \n\n", sim_steps);
+
     for t in 0..sim_steps {
 
         // user space simulator
         for i in 0..HORIZON {
-            x_ref[i] = State64 { x: 0.1 * (t + i) as f64, y: 0.1 * (t + i) as f64, angle: 45.0 * std::f64::consts::PI / 180.0 };
-            u_ref[i] = Control64 { v: 0.1, w: 0.0 };
+            x_ref[i] = State64 { x: 0.2 + 0.1 * (t + i) as f64, y: 0.1 * (t + i) as f64, angle: 45.0 * std::f64::consts::PI / 180.0 };
+            u_ref[i] = Control64 { v: 1.0, w: 0.0 };
+
+            // x_ref[i] -= x;
         }
+
+        let mut x_lin = x;
 
         // mpc space solver
         for i in 0..HORIZON {
             linearize(
                 dynamics,
-                &x_ref[i],
+                &x_lin,
                 &u_ref[i],
                 &params,
                 &mut a_cache[i],
                 &mut b_cache[i],
             );
+
+            let dx = dynamics(&x_lin, &u_ref[i], &params);
+            x_lin += dx * dt;
         }
 
         for i in 0..HORIZON {
@@ -193,61 +237,72 @@ fn mpc1() {
             }
         }
 
-        // su.fill(0.0);
+        su.fill(0.0);
         for i in 0..HORIZON {
             for j in 0..i {
-                let block = a_prod[i][j] * b_cache[i];
+                let block = a_prod[i][j] * b_cache[j];
                 su.view_mut((XN * i, UN * j), (XN, UN)).copy_from(&block);
             }
         }
 
-        delta_x0.fill(0.0);
-        delta_x0.fixed_rows_mut::<XN>(0).copy_from(&(x - x_ref[0]).to_svector());
+        // delta_x0.fill(0.0);
+        // delta_x0.fixed_rows_mut::<XN>(0).copy_from(&(x - x_ref[0]).to_svector());
 
-        let q_mat = SMatrix::<f64, XH, XH>::from_diagonal_element(q);
-        let r_mat = SMatrix::<f64, UH, UH>::from_diagonal_element(r);
+        let mut delta_x_ref = SVector::<f64, XH>::zeros();
+        let mut x_pred = x;
+
+        for i in 0..HORIZON {
+            let x_err = x_pred - x_ref[i];
+            delta_x_ref.fixed_rows_mut::<XN>(i * XN).copy_from(&x_err.to_svector());
+
+            // Predict next state using current control guess (e.g. u_prev segment)
+            let u_i = Control64::from_svector(&(u_prev.fixed_rows::<UN>(i * UN) + u_ref[i].to_svector()));
+            x_pred += dynamics(&x_pred, &u_i, &params) * dt;
+        }
+
+        // let q_mat = SMatrix::<f64, XH, XH>::from_diagonal_element(q);
+        // let r_mat = SMatrix::<f64, UH, UH>::from_diagonal_element(r);
+
+        let mut q_mat = SMatrix::<f64, XH, XH>::zeros();
+        for i in 0..HORIZON {
+            let offset = i * XN;
+            q_mat[(offset, offset)] = 1.0;
+            q_mat[(offset + 1, offset + 1)] = 1.0;
+            q_mat[(offset + 2, offset + 2)] = 0.1;
+        }
+        let mut r_mat = SMatrix::<f64, UH, UH>::zeros();
+        for i in 0..HORIZON {
+            let offset = i * UN;
+            r_mat[(offset, offset)] = 0.01;
+            r_mat[(offset + 1, offset + 1)] = 0.01;
+        }
 
         h.copy_from(&(su.transpose() * q_mat * su + r_mat));
-        f.copy_from(&(su.transpose() * q_mat * delta_x0));
+        // f.copy_from(&(su.transpose() * q_mat * delta_x0));
+        f.copy_from(&(su.transpose() * q_mat * delta_x_ref));
 
-        cg_solve()
+        let h_cond = h.norm() / h.try_inverse().map(|inv| inv.norm()).unwrap_or(1e12);
+        println!("Condition number estimate of H: {:.2e}", h_cond);
 
+        cg_solve::<UH>(&h, &f, &mut u_prev, &mut r_buf, &mut p_buf, &mut hp_buf, tol, max_iter);
+
+        let u0 = Control64::from_svector(&(u_prev.fixed_rows::<2>(0) + u_ref[0].to_svector()));
+        
+        let dx = dynamics(&x, &u0, &params);
+        x += dx * dt;
+
+        println!("Step {}: x = {:?}, u = {:?}", t, x, u0);
+
+        trajectory.push((x.x, x.y, x_ref[0].x, x_ref[0].y));
+    }
+
+    let mut traj_file = File::create("trajectory.csv").expect("Could not create file");
+    writeln!(traj_file, "step,x,y,rx,ry").unwrap();
+
+    for (i, (x, y, rx, ry)) in trajectory.iter().enumerate() {
+        writeln!(traj_file, "{},{},{},{},{}", i, x, y, rx, ry).unwrap();
     }
     
-
-    // for t in 0..sim_steps {
-    //     let x_ref: Vec<State64> = (0..HORIZON)
-    //         .map(|k| State64 { x: 0.1 * (t + k) as f64, y: 0.1 * (t + k) as f64, angle: 0.0 })
-    //         .collect();
-
-    //     let u_ref: Vec<Control64> = (0..HORIZON)
-    //         .map(|k| Control64 { v: 0.1, w: 0.0 })
-    //         .collect();
-
-    //     let p = Parameters {
-    //         ref_x: 0.0,
-    //         ref_y: 0.0,
-    //     };
-
-    //     let mut a = SMatrix::<f64, {XH}, {State64::SIZE}>::zeros();
-    //     let mut b = SMatrix::<f64, {XH}, {Control64::SIZE}>::zeros();
-
-    //     for k in 0..HORIZON {
-    //         let (a_k, b_k) = linearize(
-    //             dynamics,
-    //             &x_ref[k],
-    //             &u_ref[k],
-    //             &p,
-    //         );
-    //         a.view_mut((State64::SIZE * k, 0), (State64::SIZE, State64::SIZE)).copy_from(&a_k);
-    //         b.view_mut((State64::SIZE * k, 0), (State64::SIZE, Control64::SIZE)).copy_from(&b_k);
-    //     }
-
-    //     let su = build_time_varying_su::<{State64::SIZE}, {Control64::SIZE}, HORIZON, XH, UH>(&a, &b);
-
-    //     println!("{:?}", su);
-
-    // }
 }
 
 fn main() {

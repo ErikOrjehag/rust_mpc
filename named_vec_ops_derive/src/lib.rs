@@ -32,6 +32,7 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
          + std::ops::Sub<Output = T>
          + std::ops::Mul<Output = T>
          + std::ops::AddAssign
+         + std::ops::SubAssign
     });
 
     let fields = match &input.data {
@@ -58,6 +59,11 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
     let add_assign_fields = fields.iter().map(|f| {
         let field = &f.ident;
         quote! { self.#field += rhs.#field; }
+    });
+
+    let sub_assign_fields = fields.iter().map(|f| {
+        let field = &f.ident;
+        quote! { self.#field -= rhs.#field; }
     });
 
     let sub_fields = fields.iter().map(|f| {
@@ -87,6 +93,12 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
         impl #impl_generics std::ops::AddAssign for #name #ty_generics #where_clause {
             fn add_assign(&mut self, rhs: Self) {
                 #(#add_assign_fields)*
+            }
+        }
+
+        impl #impl_generics std::ops::SubAssign for #name #ty_generics #where_clause {
+            fn sub_assign(&mut self, rhs: Self) {
+                #(#sub_assign_fields)*
             }
         }
 
