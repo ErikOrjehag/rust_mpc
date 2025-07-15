@@ -29,7 +29,7 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
          + ::nalgebra::Scalar
         //  + ::num_dual::DualNum<F>
         //  + std::ops::Add<Output = T>
-        //  + std::ops::Sub<Output = T>
+         + std::ops::Sub<Output = T>
          + std::ops::Mul<Output = T>
          + std::ops::AddAssign
     });
@@ -60,10 +60,10 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
         quote! { self.#field += rhs.#field; }
     });
 
-    // let sub_fields = fields.iter().map(|f| {
-    //     let field = &f.ident;
-    //     quote! { #field: self.#field - rhs.#field }
-    // });
+    let sub_fields = fields.iter().map(|f| {
+        let field = &f.ident;
+        quote! { #field: self.#field - rhs.#field }
+    });
 
     let mul_fields: Vec<_> = fields.iter().map(|f| {
         let field = &f.ident;
@@ -96,6 +96,16 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
             fn mul(self, rhs: T) -> Self {
                 Self {
                     #(#mul_fields),*
+                }
+            }
+        }
+
+        impl #impl_generics std::ops::Sub<Self> for #name #ty_generics #where_clause {
+            type Output = Self;
+
+            fn sub(self, rhs: Self) -> Self {
+                Self {
+                    #(#sub_fields),*
                 }
             }
         }
