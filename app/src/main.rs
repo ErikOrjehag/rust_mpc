@@ -2,9 +2,11 @@
 use nalgebra::SMatrix;
 use named_vec_ops::NamedVecOps;
 use named_vec_ops_derive::NamedVecOps;
+use mpc::Model;
 use num_dual::{DualNum, Dual64};
 use std::fs::File;
 use std::io::Write;
+
 
 #[derive(Debug, Copy, Clone, NamedVecOps)]
 struct State<T>
@@ -32,17 +34,27 @@ struct Parameters
     // ref_y: f64,
 }
 
-fn dynamics<T: DualNum<f64> + Clone>(
-    state: &State<T>,
-    control: &Control<T>,
-    _params: &Parameters,
-) -> State<T>
+struct DiffDriveModel;
+
+impl Model<{State64::SIZE}, {Control64::SIZE}> for DiffDriveModel
 {
-    State {
-        x: state.angle.cos() * control.v.clone(),
-        y: state.angle.sin() * control.v.clone(),
-        angle: control.w.clone(),
+    type State<T> = State<T>;
+    type Control<T> = Control<T>;
+    type Parameters = Parameters;
+
+    fn dynamics<T: DualNum<f64> + Clone>(
+        state: &Self::State<T>,
+        control: &Self::Control<T>,
+        params: &Self::Parameters,
+    ) -> Self::State<T>
+    {
+        State {
+            x: state.angle.cos() * control.v.clone(),
+            y: state.angle.sin() * control.v.clone(),
+            angle: control.w.clone(),
+        }
     }
+    
 }
 
 fn mpc1()
@@ -58,7 +70,7 @@ fn mpc1()
 
     let sim_steps: usize = 200;
 
-    let mut solver = mpc::MPC::<{State64::SIZE}, {Control64::SIZE}, HORIZON, State64, Control64, Parameters>::new(dt, max_iter, tol);
+    let mut solver = mpc::MPC::<DiffDriveModel, {State64::SIZE}, {Control64::SIZE}, HORIZON>::new(dt, max_iter, tol);
 
     for i in 0..HORIZON {
         solver.q[i][(0, 0)] = 1.0; // State cost for x
@@ -81,9 +93,9 @@ fn mpc1()
 
         writeln!(traj_file, "{},{},{},{},{}", t, x0.x, x0.y, solver.x_ref[0].x, solver.x_ref[0].y).unwrap();
 
-        let u0 = solver.solve(&dynamics::<f64>, &dynamics::<Dual64>, &x0);
+        let u0 = solver.solve(&x0);
 
-        let dx = dynamics(&x0, &u0, &p);
+        let dx = DiffDriveModel::dynamics::<f64>(&x0, &u0, &p);
         x0 += dx * dt;
 
         println!("Step {}: x = {:?}, u = {:?}", t, x0, u0);    
