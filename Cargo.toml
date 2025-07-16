@@ -4,7 +4,7 @@
 members = [
     "named_vec_ops",
     "named_vec_ops_derive",
-    "erik_dual",
+    "mpc",
     "app",
 ]
 resolver = "3"

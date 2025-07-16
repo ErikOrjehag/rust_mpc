@@ -1,7 +1,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, parse_quote, Data, DeriveInput, Fields, GenericParam};
+use syn::{parse_macro_input, parse_quote, Data, DeriveInput, Fields};
 
 #[proc_macro_derive(NamedVecOps)]
 pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
@@ -9,12 +9,7 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
     let name = &input.ident;
     // let generics = &input.generics;
 
-    let mut generics = input.generics.clone();
-
-    // // Add `F` as a generic parameter if not already present
-    // if !generics.params.iter().any(|param| matches!(param, GenericParam::Type(ty) if ty.ident == "F")) {
-    //     generics.params.push(parse_quote! { F });
-    // }
+    let generics = input.generics.clone();
 
     let (impl_generics, ty_generics, original_where_clause) = generics.split_for_impl();
 
@@ -27,12 +22,12 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
         T: Copy
          + Clone
          + ::nalgebra::Scalar
-        //  + ::num_dual::DualNum<F>
-        //  + std::ops::Add<Output = T>
-         + std::ops::Sub<Output = T>
-         + std::ops::Mul<Output = T>
-         + std::ops::AddAssign
-         + std::ops::SubAssign
+         + std::ops::Add<T, Output = T>
+         + std::ops::Sub<T, Output = T>
+         + std::ops::Mul<T, Output = T>
+         + std::ops::AddAssign<T>
+         + std::ops::SubAssign<T>
+         //  + ::num_dual::DualNum<F>
     });
 
     let fields = match &input.data {
@@ -51,10 +46,10 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
     let field_names: Vec<_> = fields.iter().map(|f| &f.ident).collect();
     let field_indexes: Vec<_> = (0..n_fields).map(syn::Index::from).collect();
     
-    // let add_fields = fields.iter().map(|f| {
-    //     let field = &f.ident;
-    //     quote! { #field: self.#field + rhs.#field }
-    // });
+    let add_fields = fields.iter().map(|f| {
+        let field = &f.ident;
+        quote! { #field: self.#field + rhs.#field }
+    });
 
     let add_assign_fields = fields.iter().map(|f| {
         let field = &f.ident;
@@ -118,6 +113,16 @@ pub fn named_vec_ops_derive(input: TokenStream) -> TokenStream {
             fn sub(self, rhs: Self) -> Self {
                 Self {
                     #(#sub_fields),*
+                }
+            }
+        }
+
+        impl #impl_generics std::ops::Add<Self> for #name #ty_generics #where_clause {
+            type Output = Self;
+
+            fn add(self, rhs: Self) -> Self {
+                Self {
+                    #(#add_fields),*
                 }
             }
         }

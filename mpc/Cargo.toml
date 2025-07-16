@@ -1,11 +1,10 @@
 [package]
-name = "app"
+name = "mpc"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
 named_vec_ops = { path = "../named_vec_ops" }
 named_vec_ops_derive = { path = "../named_vec_ops_derive" }
-mpc = { path = "../mpc" }
 num-dual = "0.11.2"
 nalgebra = "0.33.2"
