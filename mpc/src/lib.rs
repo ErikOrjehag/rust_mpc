@@ -8,11 +8,11 @@ use nalgebra::{SMatrix, SVector};
 
 pub trait Model<const XN: usize, const UN: usize>
 {
-    type State<T>: NamedVecOps<T, XN> + Clone + Copy;
-    type Control<T>: NamedVecOps<T, UN> + Clone + Copy;
-    type Parameters: Default + Clone + Copy;
+    type State<T: DualNum<f64> + Copy>: NamedVecOps<T, XN>;
+    type Control<T: DualNum<f64> + Copy>: NamedVecOps<T, UN>;
+    type Parameters: Default + Copy;
 
-    fn dynamics<T: DualNum<f64> + Clone>(
+    fn dynamics<T: DualNum<f64> + Copy>(
         state: &Self::State<T>,
         control: &Self::Control<T>,
         params: &Self::Parameters,

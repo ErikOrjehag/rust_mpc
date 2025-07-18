@@ -1,9 +1,8 @@
 
-use nalgebra::SMatrix;
 use named_vec_ops::NamedVecOps;
 use named_vec_ops_derive::NamedVecOps;
 use mpc::Model;
-use num_dual::{DualNum, Dual64};
+use num_dual::DualNum;
 use std::fs::File;
 use std::io::Write;
 
@@ -38,11 +37,11 @@ struct DiffDriveModel;
 
 impl Model<{State64::SIZE}, {Control64::SIZE}> for DiffDriveModel
 {
-    type State<T> = State<T>;
-    type Control<T> = Control<T>;
+    type State<T: DualNum<f64> + Copy> = State<T>;
+    type Control<T: DualNum<f64> + Copy> = Control<T>;
     type Parameters = Parameters;
 
-    fn dynamics<T: DualNum<f64> + Clone>(
+    fn dynamics<T: DualNum<f64> + Copy>(
         state: &Self::State<T>,
         control: &Self::Control<T>,
         params: &Self::Parameters,
@@ -86,8 +85,10 @@ fn mpc1()
     for t in 0..sim_steps {
 
         for i in 0..HORIZON {
-            solver.x_ref[i] = State64 { x: 0.1 * ((t + i) as f64), y: 0.1 * ((t + i) as f64), angle: 45.0 * std::f64::consts::PI / 180.0 };
-            solver.u_ref[i] = Control64 { v: 1.0, w: 0.0 };
+            let angle = 45.0 * std::f64::consts::PI / 180.0;
+            let v = 1.0;
+            solver.u_ref[i] = Control64 { v: v, w: 0.0 };
+            solver.x_ref[i] = State64 { x: dt * v * angle.cos() * ((t + i) as f64), y: dt * v * angle.sin() * ((t + i) as f64), angle: angle };
             solver.p[i] = Parameters::default();
         }
 
